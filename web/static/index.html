@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Debate Arena 控制台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <h1>AI Debate Arena 控制台</h1>
+        <p>输入辩题与各方 API，实时观看 AI 辩论赛全过程，并将结果保存到本地。</p>
+      </header>
+
+      <main class="app-main">
+        <section class="panel">
+          <h2>赛前设置</h2>
+          <form id="debate-form" class="form-grid">
+            <div class="form-block">
+              <label for="topic">辩题</label>
+              <textarea id="topic" name="topic" rows="3" placeholder="例如：城市是否应该在公立学校强制使用 AI 家教？" required></textarea>
+            </div>
+
+            <fieldset class="form-block">
+              <legend>主持人</legend>
+              <div class="field-row">
+                <label for="host-name">姓名</label>
+                <input id="host-name" name="hostName" type="text" required />
+              </div>
+              <div class="field-row">
+                <label for="host-endpoint">API Endpoint</label>
+                <input id="host-endpoint" name="hostEndpoint" type="url" placeholder="http://localhost:8010/host/respond" required />
+              </div>
+            </fieldset>
+
+            <div class="form-flex">
+              <fieldset class="form-block">
+                <legend>辩手 A</legend>
+                <div class="field-row">
+                  <label for="debater1-name">姓名</label>
+                  <input id="debater1-name" name="debater1Name" type="text" required />
+                </div>
+                <div class="field-row">
+                  <label for="debater1-endpoint">API Endpoint</label>
+                  <input id="debater1-endpoint" name="debater1Endpoint" type="url" placeholder="http://localhost:8101/respond" required />
+                </div>
+              </fieldset>
+
+              <fieldset class="form-block">
+                <legend>辩手 B</legend>
+                <div class="field-row">
+                  <label for="debater2-name">姓名</label>
+                  <input id="debater2-name" name="debater2Name" type="text" required />
+                </div>
+                <div class="field-row">
+                  <label for="debater2-endpoint">API Endpoint</label>
+                  <input id="debater2-endpoint" name="debater2Endpoint" type="url" placeholder="http://localhost:8102/respond" required />
+                </div>
+              </fieldset>
+            </div>
+
+            <fieldset class="form-block">
+              <legend>评委阵容</legend>
+              <p class="judge-hint">至少 5 位评委，每位对应独立 API（例如：logic_professor、arbiter、empiricist、coach、rhetoric）。</p>
+              <div class="judges-grid" data-min="5">
+                <template id="judge-template">
+                  <div class="judge-card">
+                    <div class="field-row">
+                      <label>姓名</label>
+                      <input type="text" data-field="name" required />
+                    </div>
+                    <div class="field-row">
+                      <label>API Endpoint</label>
+                      <input type="url" data-field="endpoint" placeholder="http://localhost:8111/respond" required />
+                    </div>
+                    <div class="judge-card-actions">
+                      <button type="button" class="btn ghost tiny remove-judge hidden">移除</button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div class="judge-actions">
+                <button type="button" class="btn ghost" id="add-judge">新增评委</button>
+              </div>
+            </fieldset>
+
+            <fieldset class="form-block">
+              <legend>高级选项</legend>
+              <div class="options-grid">
+                <div class="field-row">
+                  <label for="max-questions">交叉质询次数</label>
+                  <input id="max-questions" name="maxQuestions" type="number" min="1" max="10" value="5" />
+                </div>
+                <div class="field-row">
+                  <label for="max-rounds">自由辩论回合</label>
+                  <input id="max-rounds" name="maxRounds" type="number" min="1" max="12" value="10" />
+                </div>
+                <div class="field-row">
+                  <label for="timeout">单次调用超时（秒）</label>
+                  <input id="timeout" name="timeout" type="number" min="5" max="120" value="45" />
+                </div>
+              </div>
+            </fieldset>
+
+            <div class="form-actions">
+              <button type="submit" class="btn primary">开始辩论</button>
+              <button type="reset" class="btn ghost" id="reset-form">清空表单</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>实时战况</h2>
+            <div class="panel-actions">
+              <button class="btn secondary" id="save-debate" disabled>保存本场辩论</button>
+            </div>
+          </div>
+
+          <div id="status-bar" class="status-bar hidden">
+            <span class="status-icon">⏳</span>
+            <span id="status-text">正在请求辩论结果...</span>
+          </div>
+
+          <div id="debate-output" class="output hidden">
+            <section class="summary">
+              <h3>概览</h3>
+              <div class="summary-grid" id="summary-grid"></div>
+            </section>
+
+            <section class="transcript">
+              <h3>辩论实况</h3>
+              <div id="timeline"></div>
+            </section>
+
+            <section class="judges">
+              <h3>评委投票</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>评委</th>
+                    <th>投票</th>
+                    <th>理由</th>
+                  </tr>
+                </thead>
+                <tbody id="judge-table"></tbody>
+              </table>
+            </section>
+          </div>
+        </section>
+      </main>
+
+      <footer class="app-footer">
+        <small>AI Debate Arena © 2024</small>
+      </footer>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
