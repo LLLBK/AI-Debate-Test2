@@ -148,6 +148,7 @@ def _build_system_prompt(config: PersonaConfig) -> str:
         "3. 若双方总分差≤2且证据相互抵消，可判定为tie。\n\n"
         "如发现程序或赛制违规，请在violations中注明并在相关维度扣分。\n"
         "禁止输出除JSON以外的任何字符（包括前后缀说明、Markdown等）。\n"
+        "Important: output must be a valid json object (json). No extra text.\n"
         "严格输出以下 JudgeOutput v1 JSON 结构，确保字段完整且取值合法：\n"
         f"{JUDGE_OUTPUT_SCHEMA}"
     )
@@ -301,4 +302,3 @@ __all__ = [
     "PersonaConfig",
     "build_judge_app",
 ]
-

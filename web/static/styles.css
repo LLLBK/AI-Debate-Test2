@@ -40,9 +40,42 @@ body {
 }
 
 .app-main {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 20px;
   flex: 1;
+}
+
+.view-tabs {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.tab-button {
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 10px 14px;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tab-button.active {
+  background: linear-gradient(135deg, #2563eb, #4f46e5);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 10px 24px -14px rgba(79, 70, 229, 0.8);
+}
+
+.view-panel {
+  display: none;
+}
+
+.view-panel.active {
+  display: block;
 }
 
 .panel {
@@ -60,6 +93,12 @@ body {
   margin-bottom: 16px;
 }
 
+.panel-header.stacked {
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 .panel-header h2 {
   margin: 0;
 }
@@ -69,9 +108,23 @@ body {
   gap: 12px;
 }
 
+.trainer-form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .form-grid {
   display: grid;
   gap: 20px;
+}
+
+.trainer-grid {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.trainer-grid .span-2 {
+  grid-column: span 2;
 }
 
 .form-block {
@@ -153,7 +206,8 @@ label {
 }
 
 input,
-textarea {
+textarea,
+select {
   border-radius: 10px;
   border: 1px solid rgba(148, 163, 184, 0.7);
   padding: 10px 12px;
@@ -163,16 +217,33 @@ textarea {
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
   outline: none;
   border-color: #2563eb;
   box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+}
+
+textarea {
+  resize: vertical;
+}
+
+.topic-block {
+  grid-column: 1 / -1;
+}
+
+.topic-block textarea {
+  min-height: 120px;
 }
 
 .options-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 16px;
+}
+
+.options-grid.compact {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
 .form-actions {
@@ -213,8 +284,69 @@ textarea:focus {
   border: 1px solid rgba(37, 99, 235, 0.3);
 }
 
+.btn.ghost.danger {
+  color: #b91c1c;
+  border-color: rgba(185, 28, 28, 0.35);
+}
+
 .btn:hover:not(:disabled) {
   transform: translateY(-1px);
+}
+
+.trainer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+  margin: 12px 0;
+  color: #475569;
+}
+
+.endpoint-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px dashed rgba(37, 99, 235, 0.35);
+  border-radius: 14px;
+  padding: 14px 18px;
+  background: rgba(219, 234, 254, 0.45);
+}
+
+.endpoint-label {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  color: #1d4ed8;
+  letter-spacing: 0.05em;
+}
+
+.endpoint-banner code {
+  display: block;
+  font-size: 0.9rem;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.endpoint-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.field-row.inline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 0;
+  font-size: 0.85rem;
+  color: #1f2937;
 }
 
 .status-bar {
@@ -385,6 +517,11 @@ textarea:focus {
   }
 
   .form-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .endpoint-actions {
     flex-direction: column;
     align-items: stretch;
   }

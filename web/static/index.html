@@ -10,16 +10,345 @@
     <div class="app-shell">
       <header class="app-header">
         <h1>AI Debate Arena 控制台</h1>
-        <p>输入辩题与各方 API，实时观看 AI 辩论赛全过程，并将结果保存到本地。</p>
+        <p>在一个页面内完成主持人 / 辩手 / 评委的训练配置，并一键运行整场 AI 辩论。</p>
       </header>
 
+      <nav class="view-tabs" role="tablist">
+        <button type="button" class="tab-button active" data-view-target="host" role="tab" aria-selected="true">训练主持人</button>
+        <button type="button" class="tab-button" data-view-target="debater" role="tab">训练辩手</button>
+        <button type="button" class="tab-button" data-view-target="judge" role="tab">训练裁判</button>
+        <button type="button" class="tab-button" data-view-target="debate" role="tab">运行辩论赛</button>
+      </nav>
+
       <main class="app-main">
-        <section class="panel">
-          <h2>赛前设置</h2>
+        <section id="view-host" class="panel view-panel active" data-view-panel="host">
+          <div class="panel-header stacked">
+            <div>
+              <h2>训练主持人 AI</h2>
+              <p>输入主持人口吻与 LLM 配置，点击一次即可生成 API endpoint。</p>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn ghost" data-reset-trainer="host">清空输入</button>
+            </div>
+          </div>
+
+          <div class="trainer-form" data-trainer="host">
+            <div class="field-row">
+              <label for="host-persona-select">选择已有主持人</label>
+              <select id="host-persona-select">
+                <option value="">新建主持人</option>
+              </select>
+            </div>
+
+            <div class="form-grid trainer-grid">
+              <div class="form-block span-2">
+                <div class="field-row">
+                  <label for="host-name-input">主持人名称</label>
+                  <input id="host-name-input" type="text" placeholder="例如：星河之声主持人" />
+                </div>
+                <div class="field-row">
+                  <label for="host-prompt">主持人提示词</label>
+                  <textarea id="host-prompt" rows="5" placeholder="描述主持人的语气、串场要求、幽默感等。"></textarea>
+                </div>
+              </div>
+
+              <div class="form-block">
+                <div class="field-row">
+                  <label for="host-llm-preset">LLM 预设</label>
+                  <select id="host-llm-preset">
+                    <option value="deepseek_chat">DeepSeek Chat</option>
+                    <option value="openai">OpenAI / 兼容</option>
+                    <option value="deepseek_reasoner">DeepSeek Reasoner</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div class="field-row">
+                  <label for="host-api-url">LLM API URL</label>
+                  <input id="host-api-url" type="url" placeholder="https://api.deepseek.com/v1/chat/completions" />
+                </div>
+                <div class="field-row">
+                  <label for="host-model">模型名称</label>
+                  <input id="host-model" type="text" placeholder="deepseek-chat" />
+                </div>
+                <div class="field-row">
+                  <label for="host-api-key">API Key</label>
+                  <input id="host-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+                </div>
+              </div>
+
+              <div class="form-block">
+                <div class="options-grid compact">
+                  <div class="field-row">
+                    <label for="host-temperature">温度</label>
+                    <input id="host-temperature" type="number" min="0" max="2" step="0.1" value="0.6" />
+                  </div>
+                  <div class="field-row">
+                    <label for="host-max-tokens">最大 Token</label>
+                    <input id="host-max-tokens" type="number" min="32" max="4096" placeholder="可选" />
+                  </div>
+                  <div class="field-row">
+                    <label for="host-timeout">超时时间（秒）</label>
+                    <input id="host-timeout" type="number" min="5" max="120" value="30" />
+                  </div>
+                </div>
+                <label class="checkbox-field">
+                  <input type="checkbox" id="host-force-json" />
+                  <span>强制 JSON 输出（主持人一般无需开启）</span>
+                </label>
+                <div class="field-row">
+                  <label for="host-extra-headers">额外 Header（JSON 对象，可为空）</label>
+                  <textarea id="host-extra-headers" rows="3" placeholder='{"X-Proxy":"demo"}'></textarea>
+                </div>
+                <div class="field-row">
+                  <label for="host-notes">备注</label>
+                  <textarea id="host-notes" rows="3" placeholder="记录此主持人的风格或使用说明。"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="endpoint-banner" id="host-endpoint-banner">
+              <div>
+                <p class="endpoint-label">生成的 API Endpoint</p>
+                <code id="host-endpoint-value">保存后自动生成</code>
+              </div>
+              <div class="endpoint-actions">
+                <button type="button" class="btn ghost tiny" id="host-copy-endpoint">复制链接</button>
+                <button type="button" class="btn secondary tiny" id="host-apply-btn" disabled>填入辩论表单</button>
+              </div>
+            </div>
+
+            <div class="trainer-actions">
+              <button type="button" class="btn primary" id="host-save-btn">保存并生成 API</button>
+              <button type="button" class="btn ghost danger" id="host-delete-btn" disabled>删除该主持人</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-debater" class="panel view-panel" data-view-panel="debater" hidden>
+          <div class="panel-header stacked">
+            <div>
+              <h2>训练辩手 AI</h2>
+              <p>可创建多位辩手并选择填入正反方，支持不同的模型与提示词。</p>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn ghost" data-reset-trainer="debater">清空输入</button>
+            </div>
+          </div>
+
+          <div class="trainer-form" data-trainer="debater">
+            <div class="field-row">
+              <label for="debater-persona-select">选择已有辩手</label>
+              <select id="debater-persona-select">
+                <option value="">新建辩手</option>
+              </select>
+            </div>
+
+            <div class="form-grid trainer-grid">
+              <div class="form-block span-2">
+                <div class="field-row">
+                  <label for="debater-name-input">辩手名称</label>
+                  <input id="debater-name-input" type="text" placeholder="例如：理性派辩手" />
+                </div>
+                <div class="field-row">
+                  <label for="debater-prompt">辩手提示词</label>
+                  <textarea id="debater-prompt" rows="5" placeholder="描述辩手的论证方式、立场偏好、可引用的素材等。"></textarea>
+                </div>
+              </div>
+
+              <div class="form-block">
+                <div class="field-row">
+                  <label for="debater-llm-preset">LLM 预设</label>
+                  <select id="debater-llm-preset">
+                    <option value="openai">OpenAI / 兼容</option>
+                    <option value="deepseek_chat">DeepSeek Chat</option>
+                    <option value="deepseek_reasoner">DeepSeek Reasoner</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div class="field-row">
+                  <label for="debater-api-url">LLM API URL</label>
+                  <input id="debater-api-url" type="url" placeholder="https://api.openai.com/v1/chat/completions" />
+                </div>
+                <div class="field-row">
+                  <label for="debater-model">模型名称</label>
+                  <input id="debater-model" type="text" placeholder="gpt-4o-mini" />
+                </div>
+                <div class="field-row">
+                  <label for="debater-api-key">API Key</label>
+                  <input id="debater-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+                </div>
+              </div>
+
+              <div class="form-block">
+                <div class="options-grid compact">
+                  <div class="field-row">
+                    <label for="debater-temperature">温度</label>
+                    <input id="debater-temperature" type="number" min="0" max="2" step="0.1" value="0.7" />
+                  </div>
+                  <div class="field-row">
+                    <label for="debater-max-tokens">最大 Token</label>
+                    <input id="debater-max-tokens" type="number" min="32" max="4096" placeholder="可选" />
+                  </div>
+                  <div class="field-row">
+                    <label for="debater-timeout">超时时间（秒）</label>
+                    <input id="debater-timeout" type="number" min="5" max="120" value="30" />
+                  </div>
+                </div>
+                <label class="checkbox-field">
+                  <input type="checkbox" id="debater-force-json" />
+                  <span>强制 JSON 输出（辩手通常关闭）</span>
+                </label>
+                <div class="field-row">
+                  <label for="debater-extra-headers">额外 Header（JSON 对象，可为空）</label>
+                  <textarea id="debater-extra-headers" rows="3"></textarea>
+                </div>
+                <div class="field-row">
+                  <label for="debater-notes">备注</label>
+                  <textarea id="debater-notes" rows="3"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="endpoint-banner">
+              <div>
+                <p class="endpoint-label">生成的 API Endpoint</p>
+                <code id="debater-endpoint-value">保存后自动生成</code>
+              </div>
+              <div class="endpoint-actions">
+                <label class="field-row inline">
+                  <span>填入位置</span>
+                  <select id="debater-slot-select">
+                    <option value="debater1">辩手 A（正方）</option>
+                    <option value="debater2">辩手 B（反方）</option>
+                  </select>
+                </label>
+                <button type="button" class="btn ghost tiny" id="debater-copy-endpoint">复制链接</button>
+                <button type="button" class="btn secondary tiny" id="debater-apply-btn" disabled>填入辩论表单</button>
+              </div>
+            </div>
+
+            <div class="trainer-actions">
+              <button type="button" class="btn primary" id="debater-save-btn">保存并生成 API</button>
+              <button type="button" class="btn ghost danger" id="debater-delete-btn" disabled>删除该辩手</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-judge" class="panel view-panel" data-view-panel="judge" hidden>
+          <div class="panel-header stacked">
+            <div>
+              <h2>训练裁判 AI</h2>
+              <p>设置评委偏好、打分方式与 LLM，快速生成多个可调用的评委 Endpoint。</p>
+            </div>
+            <div class="panel-actions">
+              <button type="button" class="btn ghost" data-reset-trainer="judge">清空输入</button>
+            </div>
+          </div>
+
+          <div class="trainer-form" data-trainer="judge">
+            <div class="field-row">
+              <label for="judge-persona-select">选择已有评委</label>
+              <select id="judge-persona-select">
+                <option value="">新建评委</option>
+              </select>
+            </div>
+
+            <div class="form-grid trainer-grid">
+              <div class="form-block span-2">
+                <div class="field-row">
+                  <label for="judge-name-input">评委名称</label>
+                  <input id="judge-name-input" type="text" placeholder="例如：逻辑学教授型评委" />
+                </div>
+                <div class="field-row">
+                  <label for="judge-prompt">评委提示词</label>
+                  <textarea id="judge-prompt" rows="5" placeholder="描述评委的打分标准、关注重点、输出格式要求。"></textarea>
+                </div>
+              </div>
+
+              <div class="form-block">
+                <div class="field-row">
+                  <label for="judge-llm-preset">LLM 预设</label>
+                  <select id="judge-llm-preset">
+                    <option value="deepseek_reasoner">DeepSeek Reasoner</option>
+                    <option value="deepseek_chat">DeepSeek Chat</option>
+                    <option value="openai">OpenAI / 兼容</option>
+                    <option value="custom">自定义</option>
+                  </select>
+                </div>
+                <div class="field-row">
+                  <label for="judge-api-url">LLM API URL</label>
+                  <input id="judge-api-url" type="url" placeholder="https://api.deepseek.com/v1/chat/completions" />
+                </div>
+                <div class="field-row">
+                  <label for="judge-model">模型名称</label>
+                  <input id="judge-model" type="text" placeholder="deepseek-reasoner" />
+                </div>
+                <div class="field-row">
+                  <label for="judge-api-key">API Key</label>
+                  <input id="judge-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+                </div>
+              </div>
+
+              <div class="form-block">
+                <div class="options-grid compact">
+                  <div class="field-row">
+                    <label for="judge-temperature">温度</label>
+                    <input id="judge-temperature" type="number" min="0" max="2" step="0.05" value="0.2" />
+                  </div>
+                  <div class="field-row">
+                    <label for="judge-max-tokens">最大 Token</label>
+                    <input id="judge-max-tokens" type="number" min="32" max="4096" placeholder="可选" />
+                  </div>
+                  <div class="field-row">
+                    <label for="judge-timeout">超时时间（秒）</label>
+                    <input id="judge-timeout" type="number" min="5" max="120" value="45" />
+                  </div>
+                </div>
+                <label class="checkbox-field">
+                  <input type="checkbox" id="judge-force-json" checked />
+                  <span>强制 JSON 输出（推荐，符合评委打分结构）</span>
+                </label>
+                <div class="field-row">
+                  <label for="judge-extra-headers">额外 Header（JSON 对象，可为空）</label>
+                  <textarea id="judge-extra-headers" rows="3"></textarea>
+                </div>
+                <div class="field-row">
+                  <label for="judge-notes">备注</label>
+                  <textarea id="judge-notes" rows="3"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="endpoint-banner">
+              <div>
+                <p class="endpoint-label">生成的 API Endpoint</p>
+                <code id="judge-endpoint-value">保存后自动生成</code>
+              </div>
+              <div class="endpoint-actions">
+                <button type="button" class="btn ghost tiny" id="judge-copy-endpoint">复制链接</button>
+                <button type="button" class="btn secondary tiny" id="judge-apply-btn" disabled>填入辩论表单</button>
+              </div>
+            </div>
+
+            <div class="trainer-actions">
+              <button type="button" class="btn primary" id="judge-save-btn">保存并生成 API</button>
+              <button type="button" class="btn ghost danger" id="judge-delete-btn" disabled>删除该评委</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="view-debate" class="panel view-panel" data-view-panel="debate" hidden>
+          <div class="panel-header">
+            <h2>运行辩论赛</h2>
+            <div class="panel-actions">
+              <button class="btn secondary" id="save-debate" disabled>保存本场辩论</button>
+            </div>
+          </div>
+
           <form id="debate-form" class="form-grid">
-            <div class="form-block">
+            <div class="form-block topic-block">
               <label for="topic">辩题</label>
-              <textarea id="topic" name="topic" rows="3" placeholder="例如：城市是否应该在公立学校强制使用 AI 家教？" required></textarea>
+              <textarea id="topic" name="topic" rows="4" placeholder="例如：城市是否应该在公立学校强制使用 AI 家教？" required></textarea>
             </div>
 
             <fieldset class="form-block">
@@ -30,7 +359,7 @@
               </div>
               <div class="field-row">
                 <label for="host-endpoint">API Endpoint</label>
-                <input id="host-endpoint" name="hostEndpoint" type="url" placeholder="http://localhost:8010/host/respond" required />
+                <input id="host-endpoint" name="hostEndpoint" type="url" placeholder="http://localhost:8000/api/personas/host/<id>/respond" required />
               </div>
             </fieldset>
 
@@ -43,7 +372,7 @@
                 </div>
                 <div class="field-row">
                   <label for="debater1-endpoint">API Endpoint</label>
-                  <input id="debater1-endpoint" name="debater1Endpoint" type="url" placeholder="http://localhost:8101/respond" required />
+                  <input id="debater1-endpoint" name="debater1Endpoint" type="url" placeholder="http://localhost:8000/api/personas/debater/<id>/respond" required />
                 </div>
               </fieldset>
 
@@ -55,14 +384,14 @@
                 </div>
                 <div class="field-row">
                   <label for="debater2-endpoint">API Endpoint</label>
-                  <input id="debater2-endpoint" name="debater2Endpoint" type="url" placeholder="http://localhost:8102/respond" required />
+                  <input id="debater2-endpoint" name="debater2Endpoint" type="url" placeholder="http://localhost:8000/api/personas/debater/<id>/respond" required />
                 </div>
               </fieldset>
             </div>
 
             <fieldset class="form-block">
               <legend>评委阵容</legend>
-              <p class="judge-hint">至少 5 位评委，每位对应独立 API（例如：logic_professor、arbiter、empiricist、coach、rhetoric）。</p>
+              <p class="judge-hint">至少 5 位评委，可随时通过“训练裁判”界面生成并填入。</p>
               <div class="judges-grid" data-min="5">
                 <template id="judge-template">
                   <div class="judge-card">
@@ -72,7 +401,7 @@
                     </div>
                     <div class="field-row">
                       <label>API Endpoint</label>
-                      <input type="url" data-field="endpoint" placeholder="http://localhost:8111/respond" required />
+                      <input type="url" data-field="endpoint" placeholder="http://localhost:8000/api/personas/judge/<id>/respond" required />
                     </div>
                     <div class="judge-card-actions">
                       <button type="button" class="btn ghost tiny remove-judge hidden">移除</button>
@@ -108,15 +437,6 @@
               <button type="reset" class="btn ghost" id="reset-form">清空表单</button>
             </div>
           </form>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header">
-            <h2>实时战况</h2>
-            <div class="panel-actions">
-              <button class="btn secondary" id="save-debate" disabled>保存本场辩论</button>
-            </div>
-          </div>
 
           <div id="status-bar" class="status-bar hidden">
             <span class="status-icon">⏳</span>

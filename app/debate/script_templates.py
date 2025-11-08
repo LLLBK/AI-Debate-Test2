@@ -8,7 +8,7 @@ def opening_statement_prompt(side: str, topic: str, briefing: List[str]) -> str:
     hints = "\n".join(f"- {item}" for item in briefing)
     base = f"""You are the {side} debater in a formal debate. The topic is: "{topic}".
 Deliver a compelling opening statement that sets the tone for your side.
-Stay under 200 words, keep a decisive tone, and end with a memorable slogan."""
+Stay under 500 words, keep a decisive tone, and end with a memorable slogan."""
     if briefing:
         base += "\nReference these pre-match notes:\n" + hints
     return dedent(base).strip()
@@ -24,7 +24,7 @@ def cross_question_prompt(
     highlights = "\n".join(f"- {item}" for item in opponent_highlights)
     prompt = f"""You represent the {side} side on the topic "{topic}".
 Pose a single, sharp cross-examination question to expose weaknesses in the opponent's stance.
-The question must be concise (max 40 words) and cannot contain multiple questions.
+The question must be concise (max 60 words) and cannot contain multiple questions.
 """
     if previous_questions:
         prompt += "Questions already asked:\n" + asked + "\n"
@@ -47,7 +47,7 @@ Question: "{question}"
 """
     if prior_answers:
         prompt += "Earlier answers you gave for cross-examination:\n" + prior + "\n"
-    prompt += "Limit the answer to 70 words and keep a confident tone."
+    prompt += "Limit the answer to 120 words and keep a confident tone."
     return dedent(prompt).strip()
 
 
@@ -60,7 +60,7 @@ def free_debate_prompt(
     prompt = f"""Free debate round {round_number} on "{topic}".
 You speak for the {side} side. Respond directly to the opponent's latest point:
 "{last_opponent_point}"
-Deliver a tight rebuttal or advancement in fewer than 90 words, end with a forward-looking line."""
+Deliver a tight rebuttal or advancement in fewer than 150 words, end with a forward-looking line."""
     return dedent(prompt).strip()
 
 
@@ -68,7 +68,7 @@ def closing_statement_prompt(side: str, topic: str, key_moments: List[str]) -> s
     moments = "\n".join(f"- {item}" for item in key_moments)
     prompt = f"""Time for the closing statement for the {side} side on the motion "{topic}".
 Summarize your strongest arguments, reclaim momentum, and finish with a decisive closer.
-Stay below 180 words."""
+Stay below 400 words."""
     if key_moments:
         prompt += "\nMoments to incorporate or reinforce:\n" + moments
     return dedent(prompt).strip()

@@ -17,11 +17,14 @@ Host interludes separate every stage with highlights pulled from the transcript,
 ## Component Map
 | Path | Purpose |
 | --- | --- |
-| `app/main.py` | FastAPI entry point exposing `/api/debate/start`, `/api/debate/save`, `/api/judges`, and serving the static UI. |
+| `app/main.py` | FastAPI entry point exposing `/api/personas/*`, `/api/debate/*`, `/api/judges`, and serving the static UI. |
 | `app/debate/orchestrator.py` | Stage-by-stage debate runner that calls each participant via `LLMClient`. |
 | `app/debate/script_templates.py` | Prompt builders for openings, cross-examinations, free debate, closings, and judging. |
+| `app/personas/models.py` | Typed schemas for persona storage, runtime payloads, and endpoint summaries. |
+| `app/personas/storage.py` | Thread-safe JSON persistence for saved personas (hosts, debaters, judges). |
+| `app/personas/runtime.py` | Generic proxy that calls whatever LLM API/Key you configure per persona. |
 | `host_service/host_api.py` | DeepSeek-powered host reference implementation responding on `/host/respond`. |
-| `host_service/debater_api.py` | Sample OpenAI-backed debater persona reachable at `/debater/respond`. |
+| `host_service/debater_api.py` | Sample DeepSeek-backed debater persona reachable at `/debater/respond`. |
 | `host_service/judges/` | Five opinionated DeepSeek judge personas sharing helpers from `judge_common.py`. |
 | `examples/mock_participant.py` | Minimal mock server that can play any role for local testing. |
 | `web/static/index.html` | Control-room UI shell loaded at `http://localhost:8000/ui/`. |
@@ -36,29 +39,41 @@ Host interludes separate every stage with highlights pulled from the transcript,
    source .venv/bin/activate
    pip install -r requirements.txt
    ```
-2. Launch the debate orchestrator (serves REST APIs and the UI):
+2. Launch the debate orchestrator **from the project root** (the `app` package must be on `PYTHONPATH`). Either `cd` into the repository or pass `--app-dir`:
    ```bash
-   uvicorn app.main:app --reload --port 8000
+   cd /path/to/AI\ Debate\ Test2
+   python3 -m uvicorn app.main:app --reload --port 8000
    ```
-3. Start the host service (choose any reachable port):
+   > Tip: Running `uvicorn` without `python3 -m` also works as long as the current working directory is this repository.
+3. (Optional) Start the standalone host service if you want to reuse the DeepSeek demo host exactly as shipped:
    ```bash
    uvicorn host_service.host_api:app --reload --port 8010
    ```
-4. Run the bundled judge personas (set `DEEPSEEK_API_KEY` first; each process hosts one persona):
-   ```bash
-   uvicorn host_service.judges.logic_professor:app --reload --port 8111
-   uvicorn host_service.judges.arbiter:app --reload --port 8112
-   uvicorn host_service.judges.empiricist:app --reload --port 8113
-   uvicorn host_service.judges.coach:app --reload --port 8114
-   uvicorn host_service.judges.rhetoric:app --reload --port 8115
-   ```
+4. The five reference judges are auto-hosted inside `app.main` under `/api/presets/judges/*`, so no extra terminals are required—just export `DEEPSEEK_API_KEY` before launching the main server.
 5. (Optional) Spin up mock debaters and judges instead of real LLMs:
    ```bash
    MOCK_PERSONA="Optimistic Architect" MOCK_ROLE=debater uvicorn examples.mock_participant:app --port 8101
    MOCK_PERSONA="Pragmatic Skeptic" MOCK_ROLE=debater uvicorn examples.mock_participant:app --port 8102
    MOCK_PERSONA="Judge Alpha" MOCK_ROLE=judge uvicorn examples.mock_participant:app --port 8111
    ```
-6. Open `http://localhost:8000/ui/` to configure endpoints and drive the match.
+6. Open `http://localhost:8000/ui/` to use the persona trainers and drive the match.
+
+### Why the server must run
+The UI reads and writes persona data via `/api/personas/*`, fetches judge presets, starts debates, and saves transcripts. Without the FastAPI server running, tabs such as “训练主持人/辩手/裁判” cannot persist settings and the debate form cannot call `/api/debate/start`.
+
+## Persona Workbench & Auto-Hosted Endpoints
+The UI now presents three trainer tabs (host, debater, judge) plus the debate console:
+
+1. **Create or select personas.** Every trainer lets you pick an existing persona or enter a new name/prompt/LLM configuration. When you click “保存并生成 API”, the backend stores the persona under `personas/registry.json` (local only, git-ignored).
+2. **Bring your own LLM credentials.** Supply any chat-completions compatible API URL and key (OpenAI, DeepSeek, Azure OpenAI, local gateways, etc.). The backend proxy (`/api/personas/<type>/<id>/respond`) forwards requests directly, so real GPT‑4/5 calls work exactly as configured—no mock.
+3. **One-click endpoint filling.** Each trainer displays the generated endpoint (e.g., `http://localhost:8000/api/personas/judge/<uuid>/respond`). Use “填入辩论表单” to auto-populate the debate form.
+4. **System prompt behaviour.** The “提示词” text area is stored verbatim and becomes the `system` message when the persona calls your chosen model. Extra context (stage, topic, highlights, etc.) is injected as the `user` message.
+5. **JSON mode compatibility.** Enabling “仅输出 JSON” (`force_json`) injects a helper hint for every prompt and requests OpenAI-style `response_format` **only** for providers that support it. DeepSeek endpoints ignore the HTTP `response_format` flag (they return plain text), so keep `force_json` on only if your prompt instructs the model to emit JSON by itself.
+
+Persona APIs are exposed via FastAPI:
+- `GET /api/personas` returns summaries for all hosts/debaters/judges.
+- `POST /api/personas/{type}` creates a persona, `PUT` updates it, `DELETE` removes it.
+- `POST /api/personas/{type}/{id}/respond` proxies the actual LLM call using the saved configuration. These URLs are what the debate orchestrator uses, so no additional services are required unless you prefer external endpoints.
 
 ## Run A Debate Programmatically
 Once all participant services respond, you can start a debate by calling the orchestrator:
@@ -90,11 +105,11 @@ curl -X POST http://localhost:8000/api/debate/start \
 The JSON response bundles the full transcript (`transcript`), host interludes (`interludes`), stage assignments (`assignments`), and judge verdicts (`judge_votes`).
 
 ## Using The Control Room UI
-- The UI served from `web/static/index.html` loads automatically from FastAPI at `/ui`.
-- `app.js` fetches preset judges (`GET /api/judges`), manages dynamic form fields, fires `/api/debate/start`, and posts `/api/debate/save`.
-- `styles.css` defines the timeline layout, judge grid, and toast notifications.
-- Enter topic, two debater endpoints, five or more judge endpoints, and one host endpoint. Click “开始辩论” to launch or “保存本场辩论” after completion to write JSON to `saved_debates/`.
-- Modify the UI by editing the static files and restarting the FastAPI server.
+- The UI has four tabs: **训练主持人、训练辩手、训练裁判、运行辩论赛**. The first three manage personas and credentials; the last tab drives debates.
+- `app.js` handles tab switching, persona CRUD via `/api/personas`, judge presets via `/api/judges`, debate launches (`/api/debate/start`), and saving (`/api/debate/save`).
+- “生成的 API Endpoint” banners show the exact URL the orchestrator will call. Use the copy/apply buttons to avoid manual typing.
+- Enter the topic plus one host, two debaters, and ≥5 judges (endpoints can be either auto-hosted personas or any external services). Click “开始辩论” to run or “保存本场辩论” afterward to archive JSON under `saved_debates/`.
+- Static assets live under `web/static/`; edit them and refresh the browser (no extra build step).
 
 ## Configuring Participant APIs
 All roles speak the same basic contract: a `POST` endpoint that accepts
@@ -115,8 +130,8 @@ and returns
 ```
 
 ### Debaters
-1. Use `host_service/debater_api.py` as the reference implementation. It shows how to read the debate context, build a message list, and call OpenAI chat models.
-2. To create a new persona, copy the module, adjust `SYSTEM_PROMPT`, change provider-specific environment variables (`OPENAI_API_URL`, `OPENAI_MODEL`, etc.), and expose it with a FastAPI `@app.post("/<persona>/respond")` route.
+1. Use `host_service/debater_api.py` as the reference implementation. It shows how to read the debate context, build a message list, and call DeepSeek chat models.
+2. To create a new persona, copy the module, adjust `SYSTEM_PROMPT`, change provider-specific environment variables (`DEEPSEEK_API_URL`, `DEEPSEEK_MODEL`, etc.), and expose it with a FastAPI `@app.post("/<persona>/respond")` route.
 3. Deploy each debater service behind its own port or host. Register the endpoint URL in the UI or in the `/api/debate/start` payload.
 
 ### Host
@@ -131,6 +146,12 @@ and returns
 
 ### Mock Services
 `examples/mock_participant.py` accepts environment variables `MOCK_ROLE` (`debater`, `judge`, or `host`) and `MOCK_PERSONA` to simulate responses. Use it when experimenting without live LLM credentials.
+
+## Live Timeline Streaming
+- `POST /api/debate/stream` now streams newline-delimited `data: {...}` events (Server-Sent Events compatible). Each event includes a `type` field (`host_interlude`, `debate_turn`, `judge_vote`, `complete`, `error`) plus the relevant payload.
+- A new `assignments` event is emitted before the first speech so the UI (or your own client) can display which persona drew the affirmative/negative roles in real time.
+- The browser UI consumes this stream to render host banter, speeches, and judge ballots in real time, so you can watch the debate unfold instead of waiting for the final `DebateResponse`.
+- You can still call `/api/debate/start` for the legacy “run to completion” behaviour if you prefer batch processing or scripting.
 
 ## Saving Debate Results
 - When you click “保存本场辩论” in the UI or call `/api/debate/save`, the backend writes a JSON snapshot under `saved_debates/<timestamp>_<slug>.json`.

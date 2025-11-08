@@ -4,7 +4,7 @@ import asyncio
 import json
 import random
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, Union
 
 from . import script_templates
 from .llm_client import LLMClient
@@ -28,9 +28,14 @@ class SideAssignment:
 
 
 class DebateOrchestrator:
-    def __init__(self, request: DebateRequest) -> None:
+    def __init__(
+        self,
+        request: DebateRequest,
+        event_callback: Optional[Callable[[str, Dict[str, Any]], Awaitable[None]]] = None,
+    ) -> None:
         self.request = request
         options = request.options
+        self._event_callback = event_callback
 
         shuffled = request.debaters[:]
         random.shuffle(shuffled)
@@ -59,8 +64,26 @@ class DebateOrchestrator:
         self.transcript: List[DebateTurn] = []
         self.interludes: List[HostInterlude] = []
         self.judge_votes: List[JudgeVote] = []
+        self._assignments_snapshot = {
+            DebateRole.AFFIRMATIVE.value: self.affirmative.config.name,
+            DebateRole.NEGATIVE.value: self.negative.config.name,
+            DebateRole.HOST.value: self.request.host.name,
+            DebateRole.JUDGE.value: [judge.config.name for judge in self.judges],
+        }
+
+    async def _emit_event(self, event_type: str, payload: Any) -> None:
+        if not self._event_callback:
+            return
+        if hasattr(payload, "model_dump"):
+            data = payload.model_dump()
+        elif isinstance(payload, dict):
+            data = payload
+        else:
+            data = payload
+        await self._event_callback(event_type, data)
 
     async def run(self) -> DebateResponse:
+        await self._emit_event("assignments", dict(self._assignments_snapshot))
         await self._host_interlude(
             stage="introduction",
             instruction="Welcome the audience, announce the motion, and tease the upcoming debate.",
@@ -128,7 +151,7 @@ class DebateOrchestrator:
         }
         assignments[DebateRole.JUDGE] = [judge.config.name for judge in self.judges]
 
-        return DebateResponse(
+        response = DebateResponse(
             topic=self.request.topic,
             assignments=assignments,
             transcript=self.transcript,
@@ -136,6 +159,8 @@ class DebateOrchestrator:
             judge_votes=self.judge_votes,
             metadata=self.request.metadata,
         )
+        await self._emit_event("complete", response)
+        return response
 
     async def _handle_opening_statements(self) -> None:
         await self._debaters_statement(
@@ -183,15 +208,15 @@ class DebateOrchestrator:
                 },
             )
             asked.append(question)
-            self.transcript.append(
-                DebateTurn(
-                    stage=f"{label}_q{turn_index + 1}",
-                    speaker_role=attacker.role,
-                    speaker_name=attacker.config.name,
-                    content=question,
-                    metadata=question_meta,
-                )
+            question_turn = DebateTurn(
+                stage=f"{label}_q{turn_index + 1}",
+                speaker_role=attacker.role,
+                speaker_name=attacker.config.name,
+                content=question,
+                metadata=question_meta,
             )
+            self.transcript.append(question_turn)
+            await self._emit_event("debate_turn", question_turn)
 
             answer_prompt = script_templates.cross_answer_prompt(
                 side=defender.role.value,
@@ -208,15 +233,15 @@ class DebateOrchestrator:
                 },
             )
             answers.append(answer)
-            self.transcript.append(
-                DebateTurn(
-                    stage=f"{label}_a{turn_index + 1}",
-                    speaker_role=defender.role,
-                    speaker_name=defender.config.name,
-                    content=answer,
-                    metadata=answer_meta,
-                )
+            answer_turn = DebateTurn(
+                stage=f"{label}_a{turn_index + 1}",
+                speaker_role=defender.role,
+                speaker_name=defender.config.name,
+                content=answer,
+                metadata=answer_meta,
             )
+            self.transcript.append(answer_turn)
+            await self._emit_event("debate_turn", answer_turn)
 
     async def _handle_free_debate(self) -> None:
         last_point = self._last_turn_content()
@@ -235,15 +260,15 @@ class DebateOrchestrator:
                     "role": self.affirmative.role.value,
                 },
             )
-            self.transcript.append(
-                DebateTurn(
-                    stage=f"free_debate_round{round_number}_affirmative",
-                    speaker_role=self.affirmative.role,
-                    speaker_name=self.affirmative.config.name,
-                    content=affirmative_reply,
-                    metadata=aff_meta,
-                )
+            affirmative_turn = DebateTurn(
+                stage=f"free_debate_round{round_number}_affirmative",
+                speaker_role=self.affirmative.role,
+                speaker_name=self.affirmative.config.name,
+                content=affirmative_reply,
+                metadata=aff_meta,
             )
+            self.transcript.append(affirmative_turn)
+            await self._emit_event("debate_turn", affirmative_turn)
 
             last_point = affirmative_reply
 
@@ -261,15 +286,15 @@ class DebateOrchestrator:
                     "role": self.negative.role.value,
                 },
             )
-            self.transcript.append(
-                DebateTurn(
-                    stage=f"free_debate_round{round_number}_negative",
-                    speaker_role=self.negative.role,
-                    speaker_name=self.negative.config.name,
-                    content=negative_reply,
-                    metadata=neg_meta,
-                )
+            negative_turn = DebateTurn(
+                stage=f"free_debate_round{round_number}_negative",
+                speaker_role=self.negative.role,
+                speaker_name=self.negative.config.name,
+                content=negative_reply,
+                metadata=neg_meta,
             )
+            self.transcript.append(negative_turn)
+            await self._emit_event("debate_turn", negative_turn)
 
             last_point = negative_reply
 
@@ -283,15 +308,15 @@ class DebateOrchestrator:
             negative_prompt,
             context={"stage": "closing_negative", "topic": self.request.topic},
         )
-        self.transcript.append(
-            DebateTurn(
-                stage="closing_negative",
-                speaker_role=self.negative.role,
-                speaker_name=self.negative.config.name,
-                content=negative_reply,
-                metadata=neg_meta,
-            )
+        negative_turn = DebateTurn(
+            stage="closing_negative",
+            speaker_role=self.negative.role,
+            speaker_name=self.negative.config.name,
+            content=negative_reply,
+            metadata=neg_meta,
         )
+        self.transcript.append(negative_turn)
+        await self._emit_event("debate_turn", negative_turn)
 
         affirmative_prompt = script_templates.closing_statement_prompt(
             side=self.affirmative.role.value,
@@ -302,15 +327,15 @@ class DebateOrchestrator:
             affirmative_prompt,
             context={"stage": "closing_affirmative", "topic": self.request.topic},
         )
-        self.transcript.append(
-            DebateTurn(
-                stage="closing_affirmative",
-                speaker_role=self.affirmative.role,
-                speaker_name=self.affirmative.config.name,
-                content=affirmative_reply,
-                metadata=aff_meta,
-            )
+        affirmative_turn = DebateTurn(
+            stage="closing_affirmative",
+            speaker_role=self.affirmative.role,
+            speaker_name=self.affirmative.config.name,
+            content=affirmative_reply,
+            metadata=aff_meta,
         )
+        self.transcript.append(affirmative_turn)
+        await self._emit_event("debate_turn", affirmative_turn)
 
     async def _handle_judges(self) -> None:
         transcript_summary = "\n".join(self._recent_turns_summary(limit=12))
@@ -333,14 +358,14 @@ class DebateOrchestrator:
             vote_line, rationale_line, extra_meta = self._parse_judge_response(content)
             combined_meta = {**metadata}
             combined_meta.update(extra_meta)
-            self.judge_votes.append(
-                JudgeVote(
-                    judge_name=judge.config.name,
-                    vote=vote_line,
-                    rationale=rationale_line,
-                    metadata=combined_meta,
-                )
+            judge_vote = JudgeVote(
+                judge_name=judge.config.name,
+                vote=vote_line,
+                rationale=rationale_line,
+                metadata=combined_meta,
             )
+            self.judge_votes.append(judge_vote)
+            await self._emit_event("judge_vote", judge_vote)
 
     async def _debaters_statement(
         self,
@@ -358,15 +383,15 @@ class DebateOrchestrator:
             prompt,
             context={"stage": stage, "topic": self.request.topic},
         )
-        self.transcript.append(
-            DebateTurn(
-                stage=stage,
-                speaker_role=side.role,
-                speaker_name=side.config.name,
-                content=reply,
-                metadata=metadata,
-            )
+        turn = DebateTurn(
+            stage=stage,
+            speaker_role=side.role,
+            speaker_name=side.config.name,
+            content=reply,
+            metadata=metadata,
         )
+        self.transcript.append(turn)
+        await self._emit_event("debate_turn", turn)
 
     async def _host_interlude(
         self,
@@ -383,9 +408,9 @@ class DebateOrchestrator:
                 "highlights": highlights,
             },
         )
-        self.interludes.append(
-            HostInterlude(stage=stage, content=content, metadata=metadata)
-        )
+        interlude = HostInterlude(stage=stage, content=content, metadata=metadata)
+        self.interludes.append(interlude)
+        await self._emit_event("host_interlude", interlude)
 
     def _build_host_prompt(
         self,

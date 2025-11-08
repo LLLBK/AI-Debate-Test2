@@ -1,8 +1,12 @@
+const tabButtons = document.querySelectorAll(".tab-button");
+const viewPanels = document.querySelectorAll(".view-panel");
+const trainerResetButtons = document.querySelectorAll("[data-reset-trainer]");
+
+const form = document.querySelector("#debate-form");
 const judgeGrid = document.querySelector(".judges-grid");
 const judgeTemplate = document.querySelector("#judge-template");
 const addJudgeButton = document.querySelector("#add-judge");
 const saveButton = document.querySelector("#save-debate");
-const form = document.querySelector("#debate-form");
 const statusBar = document.querySelector("#status-bar");
 const statusIcon = document.querySelector(".status-icon");
 const statusText = document.querySelector("#status-text");
@@ -11,6 +15,90 @@ const summaryGrid = document.querySelector("#summary-grid");
 const timeline = document.querySelector("#timeline");
 const judgeTable = document.querySelector("#judge-table");
 const toast = document.querySelector("#toast");
+
+const hostNameInput = document.querySelector("#host-name");
+const hostEndpointInput = document.querySelector("#host-endpoint");
+const debater1NameInput = document.querySelector("#debater1-name");
+const debater1EndpointInput = document.querySelector("#debater1-endpoint");
+const debater2NameInput = document.querySelector("#debater2-name");
+const debater2EndpointInput = document.querySelector("#debater2-endpoint");
+
+const LLM_PRESETS = {
+  openai: {
+    api_url: "https://api.openai.com/v1/chat/completions",
+    model: "gpt-4o-mini",
+    temperature: 0.7,
+    max_tokens: null,
+    timeout_seconds: 30,
+    force_json: false,
+  },
+  deepseek_chat: {
+    api_url: "https://api.deepseek.com/v1/chat/completions",
+    model: "deepseek-chat",
+    temperature: 0.6,
+    max_tokens: null,
+    timeout_seconds: 30,
+    force_json: false,
+  },
+  deepseek_reasoner: {
+    api_url: "https://api.deepseek.com/v1/chat/completions",
+    model: "deepseek-reasoner",
+    temperature: 0.2,
+    max_tokens: null,
+    timeout_seconds: 45,
+    force_json: true,
+  },
+  custom: {},
+};
+
+const personaCatalog = {
+  hosts: [],
+  debaters: [],
+  judges: [],
+};
+
+function buildTrainer(type, defaults) {
+  return {
+    type,
+    defaults,
+    selector: document.querySelector(`#${type}-persona-select`),
+    fields: {
+      name: document.querySelector(`#${type}-name-input`),
+      prompt: document.querySelector(`#${type}-prompt`),
+      preset: document.querySelector(`#${type}-llm-preset`),
+      apiUrl: document.querySelector(`#${type}-api-url`),
+      model: document.querySelector(`#${type}-model`),
+      apiKey: document.querySelector(`#${type}-api-key`),
+      temperature: document.querySelector(`#${type}-temperature`),
+      maxTokens: document.querySelector(`#${type}-max-tokens`),
+      timeout: document.querySelector(`#${type}-timeout`),
+      forceJson: document.querySelector(`#${type}-force-json`),
+      extraHeaders: document.querySelector(`#${type}-extra-headers`),
+      notes: document.querySelector(`#${type}-notes`),
+    },
+    endpointField: document.querySelector(`#${type}-endpoint-value`),
+    copyButton: document.querySelector(`#${type}-copy-endpoint`),
+    applyButton: document.querySelector(`#${type}-apply-btn`),
+    saveButton: document.querySelector(`#${type}-save-btn`),
+    deleteButton: document.querySelector(`#${type}-delete-btn`),
+    slotSelect: document.querySelector(`#${type}-slot-select`) || null,
+    currentDetail: null,
+    currentId: null,
+    suppressPresetChange: false,
+  };
+}
+
+const personaTrainers = {
+  host: buildTrainer("host", { preset: "deepseek_chat", forceJson: false }),
+  debater: buildTrainer("debater", { preset: "openai", forceJson: false }),
+  judge: buildTrainer("judge", { preset: "deepseek_reasoner", forceJson: true }),
+};
+
+const TRAINER_LABELS = {
+  host: "主持人",
+  debater: "辩手",
+  judge: "评委",
+};
 
 const HOST_STAGE_LABELS = {
   introduction: "主持人开场",
@@ -26,9 +114,375 @@ let currentDebate = null;
 let isRequestInFlight = false;
 let judgePresets = [];
 let judgePresetCursor = 0;
+let streamAbortController = null;
 
-const MIN_JUDGES = Number(judgeGrid?.dataset.min || 5);
+const MIN_JUDGES = Number((judgeGrid && judgeGrid.dataset && judgeGrid.dataset.min) || 5);
 const MAX_JUDGES = 12;
+
+tabButtons.forEach((button) => {
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    const target = button.dataset.viewTarget;
+    switchView(target);
+  });
+});
+
+trainerResetButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    const type = button.dataset.resetTrainer;
+    resetTrainerForm(type);
+  });
+});
+
+Object.values(personaTrainers).forEach((trainer) => {
+  if (trainer.selector) {
+    trainer.selector.addEventListener("change", () => handleTrainerSelection(trainer));
+  }
+  if (trainer.fields.preset) {
+    trainer.fields.preset.addEventListener("change", () => handlePresetChange(trainer));
+  }
+  if (trainer.saveButton) {
+    trainer.saveButton.addEventListener("click", () => persistTrainer(trainer));
+  }
+  if (trainer.deleteButton) {
+    trainer.deleteButton.addEventListener("click", () => deleteTrainer(trainer));
+  }
+  if (trainer.copyButton) {
+    trainer.copyButton.addEventListener("click", () => {
+      if (!trainer.currentDetail || !trainer.currentDetail.endpoint) {
+        showToast("请先保存角色以生成 Endpoint。", "info");
+        return;
+      }
+      copyToClipboard(trainer.currentDetail.endpoint);
+    });
+  }
+  if (trainer.applyButton) {
+    trainer.applyButton.addEventListener("click", () => applyPersonaToDebate(trainer));
+  }
+});
+
+function switchView(target) {
+  if (!target) return;
+  tabButtons.forEach((button) => {
+    const isActive = button.dataset.viewTarget === target;
+    button.classList.toggle("active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+  viewPanels.forEach((panel) => {
+    const isActive = panel.dataset.viewPanel === target;
+    panel.classList.toggle("active", isActive);
+    panel.hidden = !isActive;
+  });
+}
+
+function resetTrainerForm(type) {
+  const trainer = personaTrainers[type];
+  if (!trainer) return;
+  trainer.currentDetail = null;
+  trainer.currentId = null;
+  if (trainer.selector) {
+    trainer.selector.value = "";
+  }
+  trainer.fields.name.value = "";
+  trainer.fields.prompt.value = "";
+  trainer.fields.apiUrl.value = "";
+  trainer.fields.model.value = "";
+  trainer.fields.apiKey.value = "";
+  const presetDefaults = LLM_PRESETS[trainer.defaults.preset] || {};
+  const resolvedTemperature =
+    typeof trainer.defaults.temperature !== "undefined"
+      ? trainer.defaults.temperature
+      : presetDefaults.temperature;
+  trainer.fields.temperature.value =
+    typeof resolvedTemperature === "number" ? resolvedTemperature : 0.7;
+  trainer.fields.maxTokens.value = "";
+  const resolvedTimeout =
+    typeof trainer.defaults.timeout !== "undefined"
+      ? trainer.defaults.timeout
+      : presetDefaults.timeout_seconds;
+  trainer.fields.timeout.value =
+    typeof resolvedTimeout === "number" ? resolvedTimeout : 30;
+  trainer.fields.forceJson.checked = Boolean(trainer.defaults.forceJson);
+  trainer.fields.extraHeaders.value = "";
+  trainer.fields.notes.value = "";
+  trainer.suppressPresetChange = true;
+  trainer.fields.preset.value = trainer.defaults.preset || "custom";
+  trainer.suppressPresetChange = false;
+  applyPresetValues(trainer, trainer.fields.preset.value);
+  setTrainerEndpoint(trainer, null);
+  toggleTrainerButtons(trainer, false);
+}
+
+function handleTrainerSelection(trainer) {
+  const personaId = trainer.selector ? trainer.selector.value : "";
+  if (!personaId) {
+    resetTrainerForm(trainer.type);
+    return;
+  }
+  fetch(`/api/personas/${trainer.type}/${personaId}`)
+    .then((response) => {
+      if (!response.ok) throw new Error("加载角色失败。");
+      return response.json();
+    })
+    .then((detail) => {
+      trainer.currentDetail = detail;
+      trainer.currentId = detail.id;
+      fillTrainerFromDetail(trainer, detail);
+      toggleTrainerButtons(trainer, true);
+    })
+    .catch((error) => {
+      showToast(error.message, "error");
+    });
+}
+
+function fillTrainerFromDetail(trainer, detail) {
+  trainer.fields.name.value = detail.name || "";
+  trainer.fields.prompt.value = detail.system_prompt || "";
+  const llm = detail.llm || {};
+  trainer.fields.apiUrl.value = llm.api_url || "";
+  trainer.fields.model.value = llm.model || "";
+  trainer.fields.apiKey.value = llm.api_key || "";
+  trainer.fields.temperature.value =
+    typeof llm.temperature !== "undefined" ? llm.temperature : trainer.fields.temperature.value;
+  trainer.fields.maxTokens.value =
+    typeof llm.max_tokens !== "undefined" && llm.max_tokens !== null ? llm.max_tokens : "";
+  trainer.fields.timeout.value =
+    typeof llm.timeout_seconds !== "undefined" ? llm.timeout_seconds : trainer.fields.timeout.value;
+  trainer.fields.forceJson.checked = Boolean(llm.force_json);
+  trainer.fields.extraHeaders.value =
+    llm.extra_headers && Object.keys(llm.extra_headers).length > 0
+      ? JSON.stringify(llm.extra_headers, null, 2)
+      : "";
+  trainer.fields.notes.value = detail.notes || "";
+  const presetKey = detectPresetKey(detail.llm);
+  trainer.suppressPresetChange = true;
+  trainer.fields.preset.value = presetKey;
+  trainer.suppressPresetChange = false;
+  setTrainerEndpoint(trainer, detail.endpoint);
+  toggleTrainerButtons(trainer, true);
+}
+
+function detectPresetKey(llmConfig) {
+  if (!llmConfig) return "custom";
+  const entries = Object.entries(LLM_PRESETS);
+  for (let index = 0; index < entries.length; index += 1) {
+    const [key, preset] = entries[index];
+    if (key === "custom") continue;
+    if (preset.api_url === llmConfig.api_url && preset.model === llmConfig.model) {
+      return key;
+    }
+  }
+  return "custom";
+}
+
+function handlePresetChange(trainer) {
+  if (trainer.suppressPresetChange) return;
+  applyPresetValues(trainer, trainer.fields.preset.value);
+}
+
+function applyPresetValues(trainer, presetKey) {
+  const preset = LLM_PRESETS[presetKey];
+  if (!preset || presetKey === "custom") return;
+  trainer.fields.apiUrl.value = preset.api_url || trainer.fields.apiUrl.value;
+  trainer.fields.model.value = preset.model || trainer.fields.model.value;
+  if (typeof preset.temperature !== "undefined") {
+    trainer.fields.temperature.value = preset.temperature;
+  }
+  if (typeof preset.timeout_seconds !== "undefined") {
+    trainer.fields.timeout.value = preset.timeout_seconds;
+  }
+  if (typeof preset.force_json === "boolean") {
+    trainer.fields.forceJson.checked = preset.force_json;
+  }
+  if (preset.max_tokens) {
+    trainer.fields.maxTokens.value = preset.max_tokens;
+  }
+}
+
+function setTrainerEndpoint(trainer, endpoint) {
+  trainer.endpointField.textContent = endpoint || "保存后自动生成";
+}
+
+function toggleTrainerButtons(trainer, hasPersona) {
+  if (trainer.applyButton) {
+    trainer.applyButton.disabled = !hasPersona;
+  }
+  if (trainer.deleteButton) {
+    trainer.deleteButton.disabled = !hasPersona;
+  }
+}
+
+function parseHeadersInput(value) {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed === null || Array.isArray(parsed) || typeof parsed !== "object") {
+      throw new Error("额外 Header 需要为 JSON 对象。");
+    }
+    return parsed;
+  } catch (error) {
+    throw new Error("额外 Header 需要为合法的 JSON 对象。");
+  }
+}
+
+function collectTrainerPayload(trainer) {
+  const name = trainer.fields.name.value.trim();
+  const systemPrompt = trainer.fields.prompt.value.trim();
+  const apiUrl = trainer.fields.apiUrl.value.trim();
+  const model = trainer.fields.model.value.trim();
+  const apiKey = trainer.fields.apiKey.value.trim();
+  const temperature = Number(trainer.fields.temperature.value);
+  const timeout = Number(trainer.fields.timeout.value);
+  const maxTokensRaw = trainer.fields.maxTokens.value.trim();
+  const notes = trainer.fields.notes.value.trim();
+
+  if (!name) throw new Error("请填写名称。");
+  if (!systemPrompt) throw new Error("请填写提示词。");
+  if (!apiUrl) throw new Error("请填写 LLM API URL。");
+  if (!model) throw new Error("请填写模型名称。");
+  if (Number.isNaN(temperature)) throw new Error("温度值不合法。");
+  if (Number.isNaN(timeout) || timeout < 5) throw new Error("超时需要为数字，且至少 5 秒。");
+
+  const llmConfig = {
+    api_url: apiUrl,
+    model,
+    api_key: apiKey || null,
+    temperature,
+    timeout_seconds: timeout,
+    force_json: Boolean(trainer.fields.forceJson.checked),
+    max_tokens: maxTokensRaw ? Number(maxTokensRaw) : null,
+    extra_headers: parseHeadersInput(trainer.fields.extraHeaders.value.trim()),
+  };
+
+  if (llmConfig.max_tokens !== null && Number.isNaN(llmConfig.max_tokens)) {
+    throw new Error("最大 Token 需为数字。");
+  }
+
+  return {
+    name,
+    system_prompt: systemPrompt,
+    llm: llmConfig,
+    notes: notes || null,
+  };
+}
+
+async function persistTrainer(trainer) {
+  try {
+    const payload = collectTrainerPayload(trainer);
+    const method = trainer.currentId ? "PUT" : "POST";
+    const url = trainer.currentId
+      ? `/api/personas/${trainer.type}/${trainer.currentId}`
+      : `/api/personas/${trainer.type}`;
+    const response = await fetch(url, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || "保存失败。");
+    }
+    const detail = await response.json();
+    trainer.currentDetail = detail;
+    trainer.currentId = detail.id;
+    fillTrainerFromDetail(trainer, detail);
+    toggleTrainerButtons(trainer, true);
+    await loadPersonas();
+    if (trainer.selector) {
+      trainer.selector.value = detail.id;
+    }
+    showToast("已生成 Endpoint，可直接填入辩论表单。", "success");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+async function deleteTrainer(trainer) {
+  if (!trainer.currentId) {
+    showToast("请选择需要删除的角色。", "info");
+    return;
+  }
+  const confirmed = window.confirm("确定要删除该角色吗？此操作不可恢复。");
+  if (!confirmed) return;
+  try {
+    const response = await fetch(`/api/personas/${trainer.type}/${trainer.currentId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      throw new Error("删除失败。");
+    }
+    await loadPersonas();
+    resetTrainerForm(trainer.type);
+    showToast("已删除该角色。", "success");
+  } catch (error) {
+    showToast(error.message, "error");
+  }
+}
+
+function applyPersonaToDebate(trainer) {
+  if (!trainer.currentDetail) {
+    showToast("请先保存该角色。", "info");
+    return;
+  }
+  const { name, endpoint } = trainer.currentDetail;
+  if (trainer.type === "host") {
+    hostNameInput.value = name;
+    hostEndpointInput.value = endpoint;
+  } else if (trainer.type === "debater") {
+    const slot = trainer.slotSelect ? trainer.slotSelect.value : "debater1";
+    const targetMap = {
+      debater1: {
+        name: debater1NameInput,
+        endpoint: debater1EndpointInput,
+      },
+      debater2: {
+        name: debater2NameInput,
+        endpoint: debater2EndpointInput,
+      },
+    };
+    const target = targetMap[slot] || targetMap.debater1;
+    target.name.value = name;
+    target.endpoint.value = endpoint;
+  } else if (trainer.type === "judge") {
+    injectJudgeFromPersona(name, endpoint);
+  }
+  showToast("已填入辩论表单。", "success");
+  switchView("debate");
+}
+
+function injectJudgeFromPersona(name, endpoint) {
+  let targetCard = Array.from(judgeGrid.querySelectorAll(".judge-card")).find((card) => {
+    const nameInput = card.querySelector('input[data-field="name"]');
+    const endpointInput = card.querySelector('input[data-field="endpoint"]');
+    return nameInput && endpointInput && !nameInput.value && !endpointInput.value;
+  });
+  if (!targetCard) {
+    targetCard = addJudge(true);
+    if (!targetCard) {
+      showToast(`评委数量已达上限（${MAX_JUDGES}）。`, "info");
+      return;
+    }
+  }
+  const nameInput = targetCard.querySelector('input[data-field="name"]');
+  const endpointInput = targetCard.querySelector('input[data-field="endpoint"]');
+  if (nameInput && endpointInput) {
+    nameInput.value = name;
+    endpointInput.value = endpoint;
+  }
+}
+
+async function copyToClipboard(text) {
+  if (!text) {
+    showToast("暂无可复制的 Endpoint。", "info");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast("已复制到剪贴板。", "success");
+  } catch {
+    window.prompt("复制以下链接：", text);
+  }
+}
 
 function refreshJudgeRemoveButtons() {
   const cards = judgeGrid.querySelectorAll(".judge-card");
@@ -53,7 +507,7 @@ function removeJudgeCard(card) {
   refreshJudgeRemoveButtons();
 }
 
-function createJudgeCard(preset = {}) {
+function createJudgeCard(preset = {}, options = {}) {
   const clone = judgeTemplate.content.cloneNode(true);
   const card = clone.querySelector(".judge-card");
   const nameInput = card.querySelector('input[data-field="name"]');
@@ -75,7 +529,11 @@ function createJudgeCard(preset = {}) {
   }
 
   judgeGrid.appendChild(card);
+  if (options.focus && nameInput) {
+    nameInput.focus();
+  }
   refreshJudgeRemoveButtons();
+  return card;
 }
 
 function initJudges(presets = []) {
@@ -96,11 +554,11 @@ function initJudges(presets = []) {
   judgePresetCursor = Math.min(presets.length, MAX_JUDGES);
 }
 
-function addJudge() {
+function addJudge(focusNew = false) {
   const existing = judgeGrid.querySelectorAll(".judge-card").length;
   if (existing >= MAX_JUDGES) {
     showToast(`暂不支持超过 ${MAX_JUDGES} 位评委。`, "info");
-    return;
+    return null;
   }
 
   const preset = judgePresets[judgePresetCursor] || {
@@ -109,8 +567,9 @@ function addJudge() {
     placeholderName: `评委 ${existing + 1}`,
     placeholderEndpoint: `http://localhost:${8111 + existing}/respond`,
   };
-  createJudgeCard(preset);
+  const card = createJudgeCard(preset, { focus: focusNew });
   judgePresetCursor = Math.min(judgePresetCursor + 1, judgePresets.length);
+  return card;
 }
 
 async function fetchJudgePresets() {
@@ -125,6 +584,7 @@ async function fetchJudgePresets() {
 }
 
 function showToast(message, type = "info") {
+  if (!toast) return;
   toast.textContent = message;
   toast.classList.remove("hidden");
   toast.classList.remove("show");
@@ -148,14 +608,51 @@ function setLoadingState(isLoading, message = "正在请求辩论结果...") {
     statusBar.classList.remove("hidden");
     statusIcon.textContent = "⏳";
     statusText.textContent = message;
-    output.classList.add("hidden");
+    output.classList.remove("hidden");
   } else if (!currentDebate) {
     statusBar.classList.add("hidden");
+    statusIcon.textContent = "";
+    statusText.textContent = "";
   } else {
     statusIcon.textContent = "✅";
     statusText.textContent = "辩论完成，以下为完整战况。";
     statusBar.classList.remove("hidden");
   }
+}
+
+function setErrorState(message) {
+  isRequestInFlight = false;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  submitBtn.disabled = false;
+  saveButton.disabled = true;
+  statusBar.classList.remove("hidden");
+  statusIcon.textContent = "⚠️";
+  statusText.textContent = message;
+}
+
+function updateProgressStatus(message) {
+  if (!message) return;
+  statusBar.classList.remove("hidden");
+  statusIcon.textContent = "⏳";
+  statusText.textContent = message;
+}
+
+function bootstrapLiveDebate(payload) {
+  currentDebate = {
+    topic: payload.topic,
+    host: payload.host,
+    debaters: payload.debaters,
+    judges: payload.judges,
+    transcript: [],
+    interludes: [],
+    judge_votes: [],
+    assignments: {},
+    metadata: payload.metadata || null,
+  };
+  output.classList.remove("hidden");
+  renderSummary(currentDebate);
+  renderTimeline(currentDebate);
+  renderJudgeVotes(currentDebate);
 }
 
 function collectFormData() {
@@ -178,8 +675,10 @@ function collectFormData() {
 
   const judges = Array.from(judgeGrid.querySelectorAll(".judge-card")).map(
     (card) => {
-      const name = (card.querySelector('input[data-field="name"]')?.value || "").trim();
-      const endpoint = (card.querySelector('input[data-field="endpoint"]')?.value || "").trim();
+      const nameInput = card.querySelector('input[data-field="name"]');
+      const endpointInput = card.querySelector('input[data-field="endpoint"]');
+      const name = nameInput ? nameInput.value.trim() : "";
+      const endpoint = endpointInput ? endpointInput.value.trim() : "";
       return { name, endpoint };
     },
   );
@@ -228,8 +727,10 @@ function formatStage(stage) {
   if (stage.startsWith("free_debate")) {
     const [, info] = stage.split("round");
     const [roundPart, side] = info.split("_");
-    const round = Number(side?.match(/\d+/)?.[0] || roundPart.replace("_", ""));
-    const formattedSide = side?.includes("affirmative") ? "正方" : "反方";
+    const sideInfo = side || "";
+    const sideMatch = sideInfo.match(/\d+/);
+    const round = Number((sideMatch && sideMatch[0]) || roundPart.replace("_", ""));
+    const formattedSide = sideInfo.indexOf("affirmative") >= 0 ? "正方" : "反方";
     return `自由辩论 第 ${round} 回合 · ${formattedSide}`;
   }
   if (stage === "closing_affirmative") return "正方结辩陈词";
@@ -250,11 +751,14 @@ function renderSummary(debate) {
     assignments.negative ||
     assignments.NEGATIVE ||
     "（系统分配中）";
-  const host = assignments.host || assignments.HOST || debate.host?.name;
+  const host =
+    assignments.host ||
+    assignments.HOST ||
+    (debate.host ? debate.host.name : undefined);
   const judges =
     assignments.judge ||
     assignments.JUDGE ||
-    debate.judges?.map((judge) => judge.name) ||
+    (Array.isArray(debate.judges) ? debate.judges.map((judge) => judge.name) : []) ||
     [];
 
   const { judge_votes: judgeVotes = [] } = debate;
@@ -404,6 +908,7 @@ function renderTimeline(debate) {
 
     timeline.appendChild(container);
   });
+  timeline.scrollTop = timeline.scrollHeight;
 }
 
 function renderJudgeVotes(debate) {
@@ -411,7 +916,7 @@ function renderJudgeVotes(debate) {
   (debate.judge_votes || []).forEach((vote) => {
     const tr = document.createElement("tr");
     const judgeTd = document.createElement("td");
-    const personaName = vote.metadata?.persona_name;
+    const personaName = vote.metadata && vote.metadata.persona_name;
     judgeTd.textContent =
       personaName && personaName !== vote.judge_name
         ? `${vote.judge_name}（${personaName}）`
@@ -441,7 +946,119 @@ function renderDebate(debate) {
   renderJudgeVotes(debate);
   output.classList.remove("hidden");
   saveButton.disabled = false;
-  setLoadingState(false, "");
+}
+
+async function readEventStream(stream, onEvent) {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+
+  async function processBuffer(forceFlush = false) {
+    let boundaryIndex = buffer.indexOf("\n\n");
+    while (boundaryIndex >= 0) {
+      const rawEvent = buffer.slice(0, boundaryIndex).trim();
+      buffer = buffer.slice(boundaryIndex + 2);
+      if (rawEvent) {
+        const dataLine = rawEvent
+          .split("\n")
+          .find((line) => line.startsWith("data:"));
+        if (dataLine) {
+          const jsonText = dataLine.replace(/^data:\s*/, "");
+          if (jsonText) {
+            const parsed = JSON.parse(jsonText);
+            // eslint-disable-next-line no-await-in-loop
+            await onEvent(parsed);
+          }
+        }
+      }
+      boundaryIndex = buffer.indexOf("\n\n");
+    }
+
+    if (forceFlush && buffer.trim()) {
+      const remaining = buffer.trim();
+      buffer = "";
+      const dataLine = remaining
+        .split("\n")
+        .find((line) => line.startsWith("data:"));
+      if (dataLine) {
+        const jsonText = dataLine.replace(/^data:\s*/, "");
+        if (jsonText) {
+          await onEvent(JSON.parse(jsonText));
+        }
+      }
+    }
+  }
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // eslint-disable-next-line no-await-in-loop
+    await processBuffer(false);
+  }
+  buffer += decoder.decode();
+  await processBuffer(true);
+}
+
+async function handleStreamingEvent(event) {
+  if (!event || !event.type) return;
+  const { type } = event;
+  const payload = event.payload || {};
+
+  if (type === "host_interlude") {
+    if (!currentDebate) return;
+    currentDebate.interludes = currentDebate.interludes || [];
+    currentDebate.interludes.push(payload);
+    renderSummary(currentDebate);
+    renderTimeline(currentDebate);
+    updateProgressStatus(
+      HOST_STAGE_LABELS[payload.stage] ||
+        `主持人串场 · ${payload.stage || "进行中"}`,
+    );
+    return;
+  }
+
+  if (type === "debate_turn") {
+    if (!currentDebate) return;
+    currentDebate.transcript = currentDebate.transcript || [];
+    currentDebate.transcript.push(payload);
+    renderTimeline(currentDebate);
+    renderSummary(currentDebate);
+    updateProgressStatus(`当前环节：${formatStage(payload.stage)}`);
+    return;
+  }
+
+  if (type === "judge_vote") {
+    if (!currentDebate) return;
+    currentDebate.judge_votes = currentDebate.judge_votes || [];
+    currentDebate.judge_votes.push(payload);
+    renderJudgeVotes(currentDebate);
+    renderSummary(currentDebate);
+    updateProgressStatus(`评委 ${payload.judge_name} 已完成投票`);
+    return;
+  }
+
+  if (type === "complete") {
+    renderDebate(payload);
+    setLoadingState(false);
+    showToast("辩论完成，可在下方查看详情。", "success");
+    return;
+  }
+
+  if (type === "assignments") {
+    if (!currentDebate) {
+      currentDebate = { assignments: {} };
+    }
+    currentDebate.assignments = payload || {};
+    renderSummary(currentDebate);
+    return;
+  }
+
+  if (type === "error") {
+    throw new Error(
+      (payload && payload.message) || "服务端返回未知错误，辩论中止。",
+    );
+  }
 }
 
 async function startDebate(event) {
@@ -485,30 +1102,47 @@ async function startDebate(event) {
     return;
   }
 
-  setLoadingState(true);
+  bootstrapLiveDebate(payload);
+  setLoadingState(true, "辩论开始，正在实时更新...");
   showToast("辩论开始，正在调度各方发言...", "info");
 
+  const controller = new AbortController();
+  streamAbortController = controller;
+  let receivedCompletion = false;
+
   try {
-    const response = await fetch("/api/debate/start", {
+    const response = await fetch("/api/debate/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
+      signal: controller.signal,
     });
 
-    if (!response.ok) {
+    if (!response.ok || !response.body) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || "服务端返回错误。");
     }
 
-    const debate = await response.json();
-    renderDebate(debate);
-    showToast("辩论完成，可在下方查看详情。", "success");
+    await readEventStream(response.body, async (evt) => {
+      if (evt.type === "complete") {
+        receivedCompletion = true;
+      }
+      await handleStreamingEvent(evt);
+    });
+
+    if (!receivedCompletion) {
+      throw new Error("辩论尚未完成即断开连接。");
+    }
   } catch (error) {
-    currentDebate = null;
-    saveButton.disabled = true;
-    setLoadingState(false);
-    showToast(`辩论失败：${error.message}`, "error");
+    if (error.name === "AbortError") {
+      return;
+    }
     console.error(error);
+    saveButton.disabled = true;
+    setErrorState(`辩论失败：${error.message}`);
+    showToast(`辩论失败：${error.message}`, "error");
+  } finally {
+    streamAbortController = null;
   }
 }
 
@@ -547,14 +1181,75 @@ async function saveCurrentDebate() {
 }
 
 function resetView() {
+  if (streamAbortController) {
+    streamAbortController.abort();
+    streamAbortController = null;
+  }
   currentDebate = null;
+  isRequestInFlight = false;
+  const submitBtn = form.querySelector('button[type="submit"]');
+  if (submitBtn) submitBtn.disabled = false;
   output.classList.add("hidden");
+  summaryGrid.innerHTML = "";
+  timeline.innerHTML = "";
+  judgeTable.innerHTML = "";
   saveButton.disabled = true;
   statusBar.classList.add("hidden");
+  statusIcon.textContent = "";
+  statusText.textContent = "";
   showToast("表单已重置。", "info");
 }
 
+async function loadPersonas() {
+  try {
+    const response = await fetch("/api/personas");
+    if (!response.ok) throw new Error();
+    const data = await response.json();
+    personaCatalog.hosts = data.hosts || [];
+    personaCatalog.debaters = data.debaters || [];
+    personaCatalog.judges = data.judges || [];
+    updateTrainerSelectors();
+  } catch (error) {
+    console.warn("无法加载已有角色。", error);
+  }
+}
+
+function updateTrainerSelectors() {
+  const mapping = {
+    host: "hosts",
+    debater: "debaters",
+    judge: "judges",
+  };
+  Object.entries(personaTrainers).forEach(([type, trainer]) => {
+    const listKey = mapping[type];
+    const list = personaCatalog[listKey] || [];
+    if (!trainer.selector) return;
+    const previous = trainer.selector.value;
+    const label = TRAINER_LABELS[type] || "";
+    trainer.selector.innerHTML = `<option value="">新建${label}</option>`;
+    list.forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = `${item.name} · ${item.model}`;
+      trainer.selector.appendChild(option);
+    });
+    if (trainer.currentId && list.some((item) => item.id === trainer.currentId)) {
+      trainer.selector.value = trainer.currentId;
+    } else if (previous && list.some((item) => item.id === previous)) {
+      trainer.selector.value = previous;
+    } else {
+      trainer.selector.value = "";
+    }
+  });
+}
+
 async function bootstrap() {
+  Object.keys(personaTrainers).forEach((type) => resetTrainerForm(type));
+  const initialButton = document.querySelector(".tab-button.active");
+  const initialTarget =
+    initialButton && initialButton.dataset ? initialButton.dataset.viewTarget : "host";
+  switchView(initialTarget || "host");
+  await loadPersonas();
   judgePresets = await fetchJudgePresets();
   initJudges(judgePresets);
   refreshJudgeRemoveButtons();
@@ -570,7 +1265,7 @@ form.addEventListener("reset", () => {
 });
 
 if (addJudgeButton) {
-  addJudgeButton.addEventListener("click", addJudge);
+  addJudgeButton.addEventListener("click", () => addJudge(true));
 }
 
 saveButton.addEventListener("click", saveCurrentDebate);
